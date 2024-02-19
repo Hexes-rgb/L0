@@ -3,11 +3,25 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/nats-io/stan.go"
 )
+
+func createConnsPool() error {
+	connConfig, err := pgxpool.ParseConfig(config.ConnPoolConfig.ConnStr)
+	if err != nil {
+		return err
+	}
+	connConfig.MaxConns = config.ConnPoolConfig.MaxConns
+	connConfig.MaxConnIdleTime = time.Duration(config.ConnPoolConfig.MaxConnIdleTime) * time.Second
+	dbpool, err = pgxpool.ConnectConfig(context.Background(), connConfig)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
 func initializeTable() error {
 	conn, err := dbpool.Acquire(context.Background())
@@ -16,14 +30,16 @@ func initializeTable() error {
 	}
 	defer conn.Release()
 	_, err = conn.Exec(context.Background(), `CREATE TABLE IF NOT EXISTS orders (
-		order_uid UUID PRIMARY KEY,
-		order_data JSON NOT NULL
+		id SERIAL PRIMARY KEY,
+		order_uid UUID UNIQUE,
+		order_data JSONB NOT NULL,
+		created_at TIMESTAMP NOT NULL
     )`)
 
 	return err
 }
 
-func saveToDB(u uuid.UUID, msg *stan.Msg, ackChannel *chan *stan.Msg) {
+func saveToDB(msg *stan.Msg) {
 	var conn *pgxpool.Conn
 	var err error
 
@@ -32,10 +48,37 @@ func saveToDB(u uuid.UUID, msg *stan.Msg, ackChannel *chan *stan.Msg) {
 	}
 	defer conn.Release()
 
-	if _, err = conn.Exec(context.Background(), "INSERT INTO orders(order_uid, order_data) VALUES ($1, $2)", u, msg.Data); err != nil {
-		log.Printf("Order %v saving failed: %v", u, err)
+	orderUID, jsonData := getUUIDFromJson(msg.Data)
+
+	layout := "2006-01-02 15:04:05.000"
+	timestamp := time.Now()
+
+	timestampStr := timestamp.Format(layout)
+
+	if _, err = conn.Exec(context.Background(), "INSERT INTO orders(order_uid, order_data, created_at) VALUES ($1, $2, $3)", orderUID, jsonData, timestampStr); err != nil {
+		log.Printf("Order %v saving failed: %v", orderUID, err)
 	} else {
-		log.Printf("Order %v create successfully", u)
-		*ackChannel <- msg
+		log.Printf("Order %v create successfully", orderUID)
+		ackChannel <- msg
+		dataToCacheChannel <- NewDataToCache(orderUID, jsonData, timestamp)
 	}
+}
+
+func getOrder(id string) ([]byte, bool) {
+	var orderUID string
+	var orderData []byte
+	var createdAt time.Time
+
+	err := dbpool.QueryRow(context.Background(), "SELECT order_uid, order_data, created_at FROM orders WHERE order_uid=$1", id).Scan(&orderUID, &orderData, &createdAt)
+	if err != nil {
+		return nil, false
+	}
+
+	data := &DataToCache{
+		OrderUID:  orderUID,
+		OrderData: orderData,
+		CreatedAt: createdAt,
+	}
+	dataToCacheChannel <- data
+	return data.OrderData, true
 }

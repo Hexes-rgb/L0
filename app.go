@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -14,6 +13,9 @@ import (
 
 var config *Config
 var dbpool *pgxpool.Pool
+var cache *Cache
+var dataToCacheChannel chan *DataToCache
+var msgChannel, ackChannel chan *stan.Msg
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -22,13 +24,8 @@ func main() {
 	}
 
 	config = InitializeConfig()
-	//TODO: Pool config
-	connConfig, err := pgxpool.ParseConfig(config.PGConnStr)
-	if err != nil {
-		log.Fatal("Error parsing connection string")
-	}
 
-	dbpool, err = pgxpool.ConnectConfig(context.Background(), connConfig)
+	err := createConnsPool()
 	if err != nil {
 		log.Fatal("Error creating connection pool")
 	}
@@ -39,8 +36,15 @@ func main() {
 		panic("DB is not initialized")
 	}
 
-	msgChannel := make(chan *stan.Msg, config.MsgChannelSize)
-	ackChannel := make(chan *stan.Msg, config.MsgChannelSize)
+	cache = NewCache(int(config.MaxCacheSize))
+
+	if err = cache.InitializeCache(); err != nil {
+		panic("Cache is not initialized")
+	}
+
+	msgChannel = make(chan *stan.Msg, config.MsgChannelSize)
+	ackChannel = make(chan *stan.Msg, config.MsgChannelSize)
+	dataToCacheChannel = make(chan *DataToCache, config.MsgChannelSize)
 
 	sc, err := stan.Connect(config.StanClusterName, config.StanClientID, config.StanConnOpts...)
 	if err != nil {
@@ -49,9 +53,11 @@ func main() {
 	}
 	defer sc.Close()
 
-	go subscribeToSTAN(sc, &msgChannel)
-	go processMessages(&msgChannel, &ackChannel)
-	go processAckQueue(&ackChannel)
+	go subscribeToSTAN(sc)
+	go processSaveToDBQueue()
+	go processDataCacheQueue()
+	go createServer()
+	go processAckQueue()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

@@ -6,9 +6,9 @@ import (
 	"github.com/nats-io/stan.go"
 )
 
-func subscribeToSTAN(sc stan.Conn, msgChannel *chan *stan.Msg) {
+func subscribeToSTAN(sc stan.Conn) {
 	handler := func(msg *stan.Msg) {
-		*msgChannel <- msg
+		msgChannel <- msg
 	}
 
 	_, err := sc.Subscribe(config.StanChannelName, handler, config.StanSubOpts...)

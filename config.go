@@ -9,15 +9,21 @@ import (
 	"github.com/nats-io/stan.go"
 )
 
+type ConnPoolConfig struct {
+	ConnStr         string
+	MaxConns        int32
+	MaxConnIdleTime int
+}
 type Config struct {
 	StanConnOpts     []stan.Option
 	StanSubOpts      []stan.SubscriptionOption
 	StanClusterName  string
 	StanClientID     string
 	StanChannelName  string
-	PGConnStr        string
 	ValidationSchema string
 	MsgChannelSize   uint64
+	ConnPoolConfig   ConnPoolConfig
+	MaxCacheSize     int
 }
 
 var schema = `
@@ -25,6 +31,7 @@ var schema = `
 	"$schema": "http://json-schema.org/draft-07/schema#",
 	"type": "object",
 	"properties": {
+	  "order_uid": {"type": "string"},
 	  "track_number": {"type": "string"},
 	  "entry": {"type": "string"},
 	  "delivery": {
@@ -85,13 +92,13 @@ var schema = `
 	  "date_created": {"type": "string", "format": "date-time"},
 	  "oof_shard": {"type": "string"}
 	},
-	"required": ["track_number", "entry", "delivery", "payment", "items", "locale", "customer_id", "delivery_service", "shardkey", "sm_id", "date_created", "oof_shard"]
+	"required": ["order_uid", "track_number", "entry", "delivery", "payment", "items", "locale", "customer_id", "delivery_service", "shardkey", "sm_id", "date_created", "oof_shard"]
   }
   `
 
 func InitializeConfig() *Config {
 	var clusterName, clientID, channelName, durableName, pgConn string
-	var maxInflight, maxPubAcksInflight, pubAckWait, msgChannelSize uint64
+	var maxInflight, maxPubAcksInflight, pubAckWait, msgChannelSize, maxConns, connIdleTime, maxCacheSize uint64
 	var err error
 	if clusterName = os.Getenv("STAN_CLUSTER_NAME"); clusterName == "" {
 		panic("Entry valid cluster id")
@@ -120,6 +127,15 @@ func InitializeConfig() *Config {
 	if msgChannelSize, err = strconv.ParseUint(os.Getenv("MSG_CHANNEL_SIZE"), 10, 64); err != nil {
 		panic("Entry valid msg channel size")
 	}
+	if maxConns, err = strconv.ParseUint(os.Getenv("PGX_POOL_MAX_CONNS"), 10, 64); err != nil {
+		panic("Entry valid max conns count")
+	}
+	if connIdleTime, err = strconv.ParseUint(os.Getenv("PGX_POOL_MAX_IDLE_TIME"), 10, 64); err != nil {
+		panic("Entry valid conn idle time in seconds")
+	}
+	if maxCacheSize, err = strconv.ParseUint(os.Getenv("CACHE_MAX_SIZE"), 10, 64); err != nil {
+		panic("Entry valid max cache size")
+	}
 	opts := []stan.Option{
 		stan.SetConnectionLostHandler(func(_ stan.Conn, reason error) {
 			log.Printf("Connection lost, reason: %v", reason)
@@ -133,15 +149,21 @@ func InitializeConfig() *Config {
 		stan.SetManualAckMode(),
 		stan.DeliverAllAvailable(),
 	}
+	connPoolConfig := ConnPoolConfig{
+		ConnStr:         pgConn,
+		MaxConns:        int32(maxConns),
+		MaxConnIdleTime: int(connIdleTime),
+	}
 	return &Config{
 		StanConnOpts:     opts,
 		StanSubOpts:      subOpts,
 		StanClusterName:  clusterName,
 		StanClientID:     clientID,
 		StanChannelName:  channelName,
-		PGConnStr:        pgConn,
 		ValidationSchema: schema,
 		MsgChannelSize:   msgChannelSize,
+		ConnPoolConfig:   connPoolConfig,
+		MaxCacheSize:     int(maxCacheSize),
 	}
 
 }
