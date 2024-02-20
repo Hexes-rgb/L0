@@ -1,86 +1,74 @@
 package main
 
 import (
-	"fmt"
+	"log"
 )
 
 type Worker struct {
-	ID         int
-	Task       chan Task
-	WorkerPool chan chan Task
-	Quit       chan bool
+	ID   int
+	Quit chan bool
 }
 
-type Task struct {
-	ID int
-}
-
-func NewWorker(id int, workerPool chan chan Task) Worker {
-	return Worker{
-		ID:         id,
-		Task:       make(chan Task),
-		WorkerPool: workerPool,
-		Quit:       make(chan bool),
+func NewWorker(id int) *Worker {
+	return &Worker{
+		ID:   id,
+		Quit: make(chan bool),
 	}
 }
 
-func (w Worker) Start() {
+func (w *Worker) Start(taskChan <-chan interface{}) {
 	go func() {
 		for {
-			w.WorkerPool <- w.Task
-
 			select {
-			case task := <-w.Task:
-				fmt.Printf("Worker %d: started task %d\n", w.ID, task.ID)
-				fmt.Printf("Worker %d: finished task %d\n", w.ID, task.ID)
+			case task := <-taskChan:
+				switch t := task.(type) {
+				case SaveToDBTask:
+					go saveToDB(&t)
+				case CacheTask:
+					go cache.Add(t.data)
+				case AckMsgTask:
+					if err := t.msg.Ack(); err != nil {
+						log.Printf("Message confirmation error: %v", err)
+					}
+				}
+
 			case <-w.Quit:
-				fmt.Printf("Worker %d: stopping\n", w.ID)
 				return
 			}
 		}
 	}()
 }
 
-func (w Worker) Stop() {
+func (w *Worker) Stop() {
 	go func() {
 		w.Quit <- true
 	}()
 }
 
 type Dispatcher struct {
-	WorkerPool chan chan Task
-	TaskQueue  chan Task
-	MaxWorkers int
+	WorkerPools []*Worker
+	TaskChan    chan interface{}
+	MaxWorkers  int
+	BufferSize  int
 }
 
-func NewDispatcher(maxWorkers, maxQueueSize int) *Dispatcher {
-	pool := make(chan chan Task, maxWorkers)
-	queue := make(chan Task, maxQueueSize)
-
+func NewDispatcher(maxWorkers, bufferSize int) *Dispatcher {
 	return &Dispatcher{
-		WorkerPool: pool,
-		TaskQueue:  queue,
-		MaxWorkers: maxWorkers,
+		WorkerPools: make([]*Worker, maxWorkers),
+		TaskChan:    make(chan interface{}, bufferSize),
+		MaxWorkers:  maxWorkers,
+		BufferSize:  bufferSize,
 	}
 }
 
 func (d *Dispatcher) Run() {
 	for i := 0; i < d.MaxWorkers; i++ {
-		worker := NewWorker(i+1, d.WorkerPool)
-		worker.Start()
+		worker := NewWorker(i + 1)
+		worker.Start(d.TaskChan)
+		d.WorkerPools[i] = worker
 	}
-
-	go d.dispatch()
 }
 
-func (d *Dispatcher) dispatch() {
-	for {
-		select {
-		case task := <-d.TaskQueue:
-			go func() {
-				worker := <-d.WorkerPool
-				worker <- task
-			}()
-		}
-	}
+func (d *Dispatcher) AddTask(task interface{}) {
+	d.TaskChan <- task
 }

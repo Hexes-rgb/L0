@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -15,127 +16,90 @@ type ConnPoolConfig struct {
 	MaxConnIdleTime int
 }
 type Config struct {
-	StanConnOpts     []stan.Option
-	StanSubOpts      []stan.SubscriptionOption
-	StanClusterName  string
-	StanClientID     string
-	StanChannelName  string
-	ValidationSchema string
-	MsgChannelSize   uint64
-	ConnPoolConfig   ConnPoolConfig
-	MaxCacheSize     int
+	StanConnOpts        []stan.Option
+	StanSubOpts         []stan.SubscriptionOption
+	StanClusterName     string
+	StanClientID        string
+	StanChannelName     string
+	ValidationSchema    string
+	DispacherBufferSize int
+	ConnPoolConfig      ConnPoolConfig
+	MaxCacheSize        int
+	WorkersCount        int
+	ServicePort         string
 }
 
-var schema = `
-{
-	"$schema": "http://json-schema.org/draft-07/schema#",
-	"type": "object",
-	"properties": {
-	  "order_uid": {"type": "string"},
-	  "track_number": {"type": "string"},
-	  "entry": {"type": "string"},
-	  "delivery": {
-		"type": "object",
-		"properties": {
-		  "name": {"type": "string"},
-		  "phone": {"type": "string"},
-		  "zip": {"type": "string"},
-		  "city": {"type": "string"},
-		  "address": {"type": "string"},
-		  "region": {"type": "string"},
-		  "email": {"type": "string", "format": "email"}
-		},
-		"required": ["name", "phone", "zip", "city", "address", "region", "email"]
-	  },
-	  "payment": {
-		"type": "object",
-		"properties": {
-		  "transaction": {"type": "string"},
-		  "request_id": {"type": "string"},
-		  "currency": {"type": "string"},
-		  "provider": {"type": "string"},
-		  "amount": {"type": "integer"},
-		  "payment_dt": {"type": "integer"},
-		  "bank": {"type": "string"},
-		  "delivery_cost": {"type": "integer"},
-		  "goods_total": {"type": "integer"},
-		  "custom_fee": {"type": "integer"}
-		},
-		"required": ["transaction", "currency", "provider", "amount", "payment_dt", "bank", "delivery_cost", "goods_total", "custom_fee"]
-	  },
-	  "items": {
-		"type": "array",
-		"items": {
-		  "type": "object",
-		  "properties": {
-			"chrt_id": {"type": "integer"},
-			"track_number": {"type": "string"},
-			"price": {"type": "integer"},
-			"rid": {"type": "string"},
-			"name": {"type": "string"},
-			"sale": {"type": "integer"},
-			"size": {"type": "string"},
-			"total_price": {"type": "integer"},
-			"nm_id": {"type": "integer"},
-			"brand": {"type": "string"},
-			"status": {"type": "integer"}
-		  },
-		  "required": ["chrt_id", "track_number", "price", "rid", "name", "sale", "size", "total_price", "nm_id", "brand", "status"]
-		}
-	  },
-	  "locale": {"type": "string"},
-	  "internal_signature": {"type": "string"},
-	  "customer_id": {"type": "string"},
-	  "delivery_service": {"type": "string"},
-	  "shardkey": {"type": "string"},
-	  "sm_id": {"type": "integer"},
-	  "date_created": {"type": "string", "format": "date-time"},
-	  "oof_shard": {"type": "string"}
-	},
-	"required": ["order_uid", "track_number", "entry", "delivery", "payment", "items", "locale", "customer_id", "delivery_service", "shardkey", "sm_id", "date_created", "oof_shard"]
-  }
-  `
+func InitializeConfig() (*Config, error) {
+	clusterName, err := getEnv("STAN_CLUSTER_NAME")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_CLUSTER_NAME: %v", err)
+	}
 
-func InitializeConfig() *Config {
-	var clusterName, clientID, channelName, durableName, pgConn string
-	var maxInflight, maxPubAcksInflight, pubAckWait, msgChannelSize, maxConns, connIdleTime, maxCacheSize uint64
-	var err error
-	if clusterName = os.Getenv("STAN_CLUSTER_NAME"); clusterName == "" {
-		panic("Entry valid cluster id")
+	servicePort, err := getEnv("SERVICE_PORT")
+	if err != nil {
+		return nil, fmt.Errorf("missing SERVICE_PORT: %v", err)
 	}
-	if clientID = os.Getenv("STAN_CLIENT_ID"); clientID == "" {
-		panic("Entry valid client id")
+
+	clientID, err := getEnv("STAN_CLIENT_ID")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_CLIENT_ID: %v", err)
 	}
-	if channelName = os.Getenv("STAN_CHANNEL_NAME"); channelName == "" {
-		panic("Entry valid channel name")
+
+	channelName, err := getEnv("STAN_CHANNEL_NAME")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_CHANNEL_NAME: %v", err)
 	}
-	if durableName = os.Getenv("STAN_DURABLE_NAME"); durableName == "" {
-		panic("Entry valid durable name")
+
+	durableName, err := getEnv("STAN_DURABLE_NAME")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_DURABLE_NAME: %v", err)
 	}
-	if maxInflight, err = strconv.ParseUint(os.Getenv("STAN_MAX_INFLIGHT"), 10, 64); err != nil {
-		panic("Entry valid max inflight")
+
+	maxInflight, err := getUint64Env("STAN_MAX_INFLIGHT")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_MAX_INFLIGHT: %v", err)
 	}
-	if pgConn = os.Getenv("PG_CONN_STR"); pgConn == "" {
-		panic("Entry valid postgres connection string")
+
+	pgConn, err := getEnv("PG_CONN_STR")
+	if err != nil {
+		return nil, fmt.Errorf("missing PG_CONN_STR: %v", err)
 	}
-	if maxPubAcksInflight, err = strconv.ParseUint(os.Getenv("STAN_MAX_PUB_ACKS_INFLIGHT"), 10, 64); err != nil {
-		panic("Entry valid max pub acks inflight")
+
+	maxPubAcksInflight, err := getUint64Env("STAN_MAX_PUB_ACKS_INFLIGHT")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_MAX_PUB_ACKS_INFLIGHT: %v", err)
 	}
-	if pubAckWait, err = strconv.ParseUint(os.Getenv("STAN_PUB_ACK_WAIT"), 10, 64); err != nil {
-		panic("Entry valid max pub acks wait")
+
+	pubAckWait, err := getUint64Env("STAN_PUB_ACK_WAIT")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_PUB_ACK_WAIT: %v", err)
 	}
-	if msgChannelSize, err = strconv.ParseUint(os.Getenv("MSG_CHANNEL_SIZE"), 10, 64); err != nil {
-		panic("Entry valid msg channel size")
+
+	dispatcherBufferSize, err := getUint64Env("DISPATCHER_BUFFER_SIZE")
+	if err != nil {
+		return nil, fmt.Errorf("missing DISPATCHER_BUFFER_SIZE: %v", err)
 	}
-	if maxConns, err = strconv.ParseUint(os.Getenv("PGX_POOL_MAX_CONNS"), 10, 64); err != nil {
-		panic("Entry valid max conns count")
+
+	workersCount, err := getUint64Env("WORKERS_COUNT")
+	if err != nil {
+		return nil, fmt.Errorf("missing WORKERS_COUNT: %v", err)
 	}
-	if connIdleTime, err = strconv.ParseUint(os.Getenv("PGX_POOL_MAX_IDLE_TIME"), 10, 64); err != nil {
-		panic("Entry valid conn idle time in seconds")
+
+	maxConns, err := getUint64Env("PGX_POOL_MAX_CONNS")
+	if err != nil {
+		return nil, fmt.Errorf("missing PGX_POOL_MAX_CONNS: %v", err)
 	}
-	if maxCacheSize, err = strconv.ParseUint(os.Getenv("CACHE_MAX_SIZE"), 10, 64); err != nil {
-		panic("Entry valid max cache size")
+
+	connIdleTime, err := getUint64Env("PGX_POOL_MAX_IDLE_TIME")
+	if err != nil {
+		return nil, fmt.Errorf("missing PGX_POOL_MAX_IDLE_TIME: %v", err)
 	}
+
+	maxCacheSize, err := getUint64Env("CACHE_MAX_SIZE")
+	if err != nil {
+		return nil, fmt.Errorf("missing CACHE_MAX_SIZE: %v", err)
+	}
+
 	opts := []stan.Option{
 		stan.SetConnectionLostHandler(func(_ stan.Conn, reason error) {
 			log.Printf("Connection lost, reason: %v", reason)
@@ -155,15 +119,36 @@ func InitializeConfig() *Config {
 		MaxConnIdleTime: int(connIdleTime),
 	}
 	return &Config{
-		StanConnOpts:     opts,
-		StanSubOpts:      subOpts,
-		StanClusterName:  clusterName,
-		StanClientID:     clientID,
-		StanChannelName:  channelName,
-		ValidationSchema: schema,
-		MsgChannelSize:   msgChannelSize,
-		ConnPoolConfig:   connPoolConfig,
-		MaxCacheSize:     int(maxCacheSize),
-	}
+		StanConnOpts:        opts,
+		StanSubOpts:         subOpts,
+		StanClusterName:     clusterName,
+		StanClientID:        clientID,
+		StanChannelName:     channelName,
+		ValidationSchema:    schema,
+		DispacherBufferSize: int(dispatcherBufferSize),
+		ConnPoolConfig:      connPoolConfig,
+		MaxCacheSize:        int(maxCacheSize),
+		ServicePort:         servicePort,
+		WorkersCount:        int(workersCount),
+	}, nil
+}
 
+func getEnv(key string) (string, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return "", fmt.Errorf("environment variable %s is empty", key)
+	}
+	return value, nil
+}
+
+func getUint64Env(key string) (uint64, error) {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return 0, fmt.Errorf("environment variable %s is empty", key)
+	}
+	value, err := strconv.ParseUint(valueStr, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse environment variable %s: %v", key, err)
+	}
+	return value, nil
 }

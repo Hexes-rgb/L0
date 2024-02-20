@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/nats-io/stan.go"
 )
 
 func createConnsPool() error {
@@ -39,7 +38,7 @@ func initializeTable() error {
 	return err
 }
 
-func saveToDB(msg *stan.Msg) {
+func saveToDB(task *SaveToDBTask) {
 	var conn *pgxpool.Conn
 	var err error
 
@@ -48,7 +47,7 @@ func saveToDB(msg *stan.Msg) {
 	}
 	defer conn.Release()
 
-	orderUID, jsonData := getUUIDFromJson(msg.Data)
+	orderUID, jsonData := getUUIDFromJson(task.msg.Data)
 
 	layout := "2006-01-02 15:04:05.000"
 	timestamp := time.Now()
@@ -59,8 +58,8 @@ func saveToDB(msg *stan.Msg) {
 		log.Printf("Order %v saving failed: %v", orderUID, err)
 	} else {
 		log.Printf("Order %v create successfully", orderUID)
-		ackChannel <- msg
-		dataToCacheChannel <- NewDataToCache(orderUID, jsonData, timestamp)
+		createAckMsgTask(task.msg)
+		createCacheTask(NewDataToCache(orderUID, jsonData, timestamp))
 	}
 }
 
@@ -79,6 +78,6 @@ func getOrder(id string) ([]byte, bool) {
 		OrderData: orderData,
 		CreatedAt: createdAt,
 	}
-	dataToCacheChannel <- data
+	createCacheTask(data)
 	return data.OrderData, true
 }

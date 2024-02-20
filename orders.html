@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Order Page</title>
+    <link rel="stylesheet" href="./static/styles.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body>
+    <h1>Order Page</h1>
+    <form id="orderForm">
+        <label for="orderId">Enter Order ID:</label>
+        <input type="text" id="orderId" name="orderId">
+        <button type="submit">Get Order</button>
+    </form>
+    
+    <div id="orderDetails">
+    </div>
+
+    <script>
+        $(document).ready(function() {
+            $('#orderForm').submit(function(event) {
+                event.preventDefault();
+                
+                var orderId = $('#orderId').val();
+                
+                $.ajax({
+                    type: 'GET',
+                    url: '/getOrder?id=' + orderId,
+                    success: function(response) {
+                        $('#orderDetails').html('<pre>' + JSON.stringify(response, null, 2) + '</pre>');
+                        console.log(response);
+                    },
+                    error: function(xhr, status, error) {
+                        console.error('AJAX error:', status, error);
+                        $('#orderDetails').html(JSON.stringify(xhr.responseText, null, 2));
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

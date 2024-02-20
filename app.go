@@ -14,50 +14,46 @@ import (
 var config *Config
 var dbpool *pgxpool.Pool
 var cache *Cache
-var dataToCacheChannel chan *DataToCache
-var msgChannel, ackChannel chan *stan.Msg
+var sc stan.Conn
+var dispatcher *Dispatcher
 
 func main() {
-	if err := godotenv.Load(); err != nil {
+	var err error
+	if err = godotenv.Load(); err != nil {
 		log.Fatal("Error loading .env file")
-		panic(err)
 	}
 
-	config = InitializeConfig()
+	if config, err = InitializeConfig(); err != nil {
+		log.Fatalf("Error initializing config: %v", err)
+	}
 
-	err := createConnsPool()
-	if err != nil {
+	if err = createConnsPool(); err != nil {
 		log.Fatal("Error creating connection pool")
 	}
 	defer dbpool.Close()
 
-	err = initializeTable()
-	if err != nil {
-		panic("DB is not initialized")
+	if err = initializeTable(); err != nil {
+		log.Fatal("DB is not initialized")
 	}
 
-	cache = NewCache(int(config.MaxCacheSize))
+	cache = NewCache(config.MaxCacheSize)
 
 	if err = cache.InitializeCache(); err != nil {
-		panic("Cache is not initialized")
+		log.Fatal("Cache is not initialized")
 	}
 
-	msgChannel = make(chan *stan.Msg, config.MsgChannelSize)
-	ackChannel = make(chan *stan.Msg, config.MsgChannelSize)
-	dataToCacheChannel = make(chan *DataToCache, config.MsgChannelSize)
-
-	sc, err := stan.Connect(config.StanClusterName, config.StanClientID, config.StanConnOpts...)
-	if err != nil {
+	if sc, err = stan.Connect(config.StanClusterName, config.StanClientID, config.StanConnOpts...); err != nil {
 		log.Fatalf("NATS Streaming connection error: %v", err)
-		panic(err)
 	}
 	defer sc.Close()
 
-	go subscribeToSTAN(sc)
-	go processSaveToDBQueue()
-	go processDataCacheQueue()
+	dispatcher = NewDispatcher(config.WorkersCount, config.DispacherBufferSize)
+
+	dispatcher.Run()
+
+	go subscribeToSTAN()
+
 	go createServer()
-	go processAckQueue()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)

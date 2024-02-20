@@ -6,9 +6,14 @@ import (
 	"github.com/nats-io/stan.go"
 )
 
-func subscribeToSTAN(sc stan.Conn) {
+func subscribeToSTAN() {
 	handler := func(msg *stan.Msg) {
-		msgChannel <- msg
+		if validateData(msg) {
+			createSaveToDBTask(msg)
+		} else {
+			log.Println("Received invalid data")
+			createAckMsgTask(msg)
+		}
 	}
 
 	_, err := sc.Subscribe(config.StanChannelName, handler, config.StanSubOpts...)
