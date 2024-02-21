@@ -24,9 +24,12 @@ func (w *Worker) Start(taskChan <-chan interface{}) {
 				switch t := task.(type) {
 				case SaveToDBTask:
 					go saveToDB(&t)
+					log.Printf("worker %d start task %T", w.ID, t)
 				case CacheTask:
 					go cache.Add(t.data)
+					log.Printf("worker %d start task %T", w.ID, t)
 				case AckMsgTask:
+					log.Printf("worker %d start task %T", w.ID, t)
 					if err := t.msg.Ack(); err != nil {
 						log.Printf("Message confirmation error: %v", err)
 					}
@@ -46,18 +49,16 @@ func (w *Worker) Stop() {
 }
 
 type Dispatcher struct {
-	WorkerPools []*Worker
-	TaskChan    chan interface{}
-	MaxWorkers  int
-	BufferSize  int
+	TaskChan   chan interface{}
+	MaxWorkers int
+	BufferSize int
 }
 
 func NewDispatcher(maxWorkers, bufferSize int) *Dispatcher {
 	return &Dispatcher{
-		WorkerPools: make([]*Worker, maxWorkers),
-		TaskChan:    make(chan interface{}, bufferSize),
-		MaxWorkers:  maxWorkers,
-		BufferSize:  bufferSize,
+		TaskChan:   make(chan interface{}, bufferSize),
+		MaxWorkers: maxWorkers,
+		BufferSize: bufferSize,
 	}
 }
 
@@ -65,7 +66,6 @@ func (d *Dispatcher) Run() {
 	for i := 0; i < d.MaxWorkers; i++ {
 		worker := NewWorker(i + 1)
 		worker.Start(d.TaskChan)
-		d.WorkerPools[i] = worker
 	}
 }
 

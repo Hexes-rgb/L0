@@ -43,7 +43,7 @@ func createServer() {
 		http.NotFound(w, r)
 	})
 
-	fmt.Println("The server is running on http://localhost:" + config.ServicePort + "/orders")
+	fmt.Println("The orders page on http://localhost:" + config.ServicePort + "/orders")
 	if err := http.ListenAndServe(":"+config.ServicePort, nil); err != nil {
 		fmt.Println("Error when starting the server:", err)
 	}
