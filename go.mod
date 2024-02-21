@@ -3,7 +3,6 @@ module github.com/Hexes-rgb/L0
 go 1.22.0
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/jackc/pgx/v4 v4.18.1
 	github.com/joho/godotenv v1.5.1
 	github.com/nats-io/stan.go v0.10.4
