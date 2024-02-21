@@ -30,6 +30,11 @@ type Config struct {
 }
 
 func InitializeConfig() (*Config, error) {
+	stanConnStr, err := getEnv("STAN_URL")
+	if err != nil {
+		return nil, fmt.Errorf("missing STAN_URL: %v", err)
+	}
+
 	clusterName, err := getEnv("STAN_CLUSTER_NAME")
 	if err != nil {
 		return nil, fmt.Errorf("missing STAN_CLUSTER_NAME: %v", err)
@@ -101,6 +106,7 @@ func InitializeConfig() (*Config, error) {
 	}
 
 	opts := []stan.Option{
+		stan.NatsURL(stanConnStr),
 		stan.SetConnectionLostHandler(func(_ stan.Conn, reason error) {
 			log.Printf("Connection lost, reason: %v", reason)
 		}),
